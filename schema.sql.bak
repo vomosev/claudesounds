@@ -1,0 +1,430 @@
+-- ============================================================================
+-- ClaudeSounds — MySQL 8 schema
+-- Music distribution, publishing & marketing platform
+--
+-- Import with:
+--   mysql -h $DB_HOST -u $DB_USER -p $DB_NAME < schema.sql
+--
+-- Character set: utf8mb4 / utf8mb4_unicode_ci everywhere.
+-- ============================================================================
+
+SET NAMES utf8mb4;
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- ----------------------------------------------------------------------------
+-- Drop in dependency-safe order (re-runnable script)
+-- ----------------------------------------------------------------------------
+DROP TABLE IF EXISTS royalty_statements;
+DROP TABLE IF EXISTS stream_stats;
+DROP TABLE IF EXISTS streams;
+DROP TABLE IF EXISTS campaigns;
+DROP TABLE IF EXISTS publishing_splits;
+DROP TABLE IF EXISTS publishing_works;
+DROP TABLE IF EXISTS works;
+DROP TABLE IF EXISTS store_deliveries;
+DROP TABLE IF EXISTS release_stores;
+DROP TABLE IF EXISTS tracks;
+DROP TABLE IF EXISTS releases;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+-- ----------------------------------------------------------------------------
+-- users
+-- ----------------------------------------------------------------------------
+CREATE TABLE users (
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  email         VARCHAR(190) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  display_name  VARCHAR(120) NOT NULL,
+  artist_name   VARCHAR(120) NOT NULL,
+  role          ENUM('artist','label','admin') NOT NULL DEFAULT 'artist',
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_users_email (email),
+  KEY idx_users_role (role)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- sessions (express-mysql-session compatible)
+-- ----------------------------------------------------------------------------
+CREATE TABLE sessions (
+  session_id VARCHAR(128) NOT NULL,
+  expires    INT UNSIGNED NOT NULL,
+  data       MEDIUMTEXT COLLATE utf8mb4_bin,
+  PRIMARY KEY (session_id),
+  KEY idx_sessions_expires (expires)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+-- ----------------------------------------------------------------------------
+-- releases
+-- ----------------------------------------------------------------------------
+CREATE TABLE releases (
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id       INT UNSIGNED NOT NULL,
+  title         VARCHAR(200) NOT NULL,
+  artist_name   VARCHAR(160) NOT NULL,
+  release_type  ENUM('single','ep','album') NOT NULL DEFAULT 'single',
+  primary_genre VARCHAR(80) NOT NULL DEFAULT 'Pop',
+  genre         VARCHAR(100) DEFAULT NULL,
+  label         VARCHAR(160) DEFAULT NULL,
+  upc           VARCHAR(32) DEFAULT NULL,
+  release_date  DATE DEFAULT NULL,
+  status        ENUM('draft','in_review','approved','live','takedown') NOT NULL DEFAULT 'draft',
+  artwork_color VARCHAR(16) NOT NULL DEFAULT 'amber',
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_releases_user (user_id),
+  KEY idx_releases_status (status),
+  KEY idx_releases_date (release_date),
+  CONSTRAINT fk_releases_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- tracks
+-- ----------------------------------------------------------------------------
+CREATE TABLE tracks (
+  id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  release_id       INT UNSIGNED NOT NULL,
+  track_number     SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+  title            VARCHAR(200) NOT NULL,
+  isrc             VARCHAR(24) DEFAULT NULL,
+  duration_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+  explicit         TINYINT(1) NOT NULL DEFAULT 0,
+  songwriters      TEXT,
+  PRIMARY KEY (id),
+  KEY idx_tracks_release (release_id),
+  KEY idx_tracks_isrc (isrc),
+  CONSTRAINT fk_tracks_release FOREIGN KEY (release_id) REFERENCES releases (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- store_deliveries
+-- ----------------------------------------------------------------------------
+CREATE TABLE store_deliveries (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  release_id   INT UNSIGNED NOT NULL,
+  store_name   VARCHAR(80) NOT NULL,
+  status       ENUM('pending','delivered','live','failed') NOT NULL DEFAULT 'pending',
+  delivered_at DATETIME DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_deliveries_release (release_id),
+  KEY idx_deliveries_status (status),
+  CONSTRAINT fk_deliveries_release FOREIGN KEY (release_id) REFERENCES releases (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- release_stores
+-- ----------------------------------------------------------------------------
+CREATE TABLE release_stores (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  release_id   INT UNSIGNED NOT NULL,
+  store_name   VARCHAR(80) NOT NULL,
+  delivered    TINYINT(1) NOT NULL DEFAULT 0,
+  delivered_at DATETIME DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_release_stores_release (release_id),
+  CONSTRAINT fk_release_stores_release FOREIGN KEY (release_id) REFERENCES releases (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- publishing_works
+-- ----------------------------------------------------------------------------
+CREATE TABLE publishing_works (
+  id                  INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id             INT UNSIGNED NOT NULL,
+  track_id            INT UNSIGNED DEFAULT NULL,
+  work_title          VARCHAR(200) NOT NULL,
+  iswc                VARCHAR(24) DEFAULT NULL,
+  society             VARCHAR(60) DEFAULT NULL,
+  registration_status ENUM('unregistered','submitted','registered') NOT NULL DEFAULT 'unregistered',
+  created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_works_user (user_id),
+  KEY idx_works_track (track_id),
+  KEY idx_works_status (registration_status),
+  CONSTRAINT fk_works_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_works_track FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- works (alternative publishing table)
+-- ----------------------------------------------------------------------------
+CREATE TABLE works (
+  id                  INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id             INT UNSIGNED NOT NULL,
+  title               VARCHAR(255) NOT NULL,
+  iswc                VARCHAR(32) DEFAULT NULL,
+  writers             VARCHAR(500) NOT NULL,
+  publisher           VARCHAR(255) DEFAULT NULL,
+  split_percent       DECIMAL(5,2) DEFAULT NULL,
+  registration_status ENUM('pending','registered','rejected') NOT NULL DEFAULT 'pending',
+  created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_works_user_id (user_id),
+  KEY idx_works_registration_status (registration_status),
+  CONSTRAINT fk_works_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- publishing_splits
+-- ----------------------------------------------------------------------------
+CREATE TABLE publishing_splits (
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  work_id       INT UNSIGNED NOT NULL,
+  writer_name   VARCHAR(160) NOT NULL,
+  role          ENUM('composer','lyricist','arranger','publisher') NOT NULL DEFAULT 'composer',
+  share_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  PRIMARY KEY (id),
+  KEY idx_splits_work (work_id),
+  CONSTRAINT fk_splits_work FOREIGN KEY (work_id) REFERENCES publishing_works (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- campaigns
+-- ----------------------------------------------------------------------------
+CREATE TABLE campaigns (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      INT UNSIGNED NOT NULL,
+  release_id   INT UNSIGNED DEFAULT NULL,
+  name         VARCHAR(200) NOT NULL,
+  channel      ENUM('playlist_pitch','social_ads','pr','email','influencer','playlist','social','ads') NOT NULL DEFAULT 'playlist_pitch',
+  status       ENUM('draft','scheduled','running','completed','paused','planned','active') NOT NULL DEFAULT 'draft',
+  budget_cents INT NOT NULL DEFAULT 0,
+  spend_cents  INT NOT NULL DEFAULT 0,
+  budget       DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  spend        DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  start_date   DATE DEFAULT NULL,
+  end_date     DATE DEFAULT NULL,
+  clicks       INT NOT NULL DEFAULT 0,
+  impressions  INT NOT NULL DEFAULT 0,
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_campaigns_user (user_id),
+  KEY idx_campaigns_release (release_id),
+  KEY idx_campaigns_status (status),
+  CONSTRAINT fk_campaigns_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_campaigns_release FOREIGN KEY (release_id) REFERENCES releases (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- stream_stats
+-- ----------------------------------------------------------------------------
+CREATE TABLE stream_stats (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  release_id   INT UNSIGNED NOT NULL,
+  stat_date    DATE NOT NULL,
+  platform     VARCHAR(60) NOT NULL DEFAULT 'Spotify',
+  streams      INT NOT NULL DEFAULT 0,
+  listeners    INT NOT NULL DEFAULT 0,
+  revenue_cents INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  KEY idx_stats_release_date (release_id, stat_date),
+  KEY idx_stats_date (stat_date),
+  KEY idx_stats_platform (platform),
+  CONSTRAINT fk_stats_release FOREIGN KEY (release_id) REFERENCES releases (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- streams (alternative analytics table)
+-- ----------------------------------------------------------------------------
+CREATE TABLE streams (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  release_id   INT UNSIGNED NOT NULL,
+  stream_date  DATE NOT NULL,
+  store_name   VARCHAR(60) NOT NULL,
+  stream_count INT NOT NULL DEFAULT 0,
+  revenue      DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  PRIMARY KEY (id),
+  KEY idx_streams_release (release_id),
+  KEY idx_streams_date (stream_date),
+  KEY idx_streams_store (store_name),
+  CONSTRAINT fk_streams_release FOREIGN KEY (release_id) REFERENCES releases (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------------------
+-- royalty_statements
+-- ----------------------------------------------------------------------------
+CREATE TABLE royalty_statements (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      INT UNSIGNED NOT NULL,
+  period_label VARCHAR(60) NOT NULL,
+  gross_cents  INT NOT NULL DEFAULT 0,
+  fee_cents    INT NOT NULL DEFAULT 0,
+  net_cents    INT NOT NULL DEFAULT 0,
+  gross_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  fees_amount  DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  net_amount   DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  status       ENUM('pending','paid') NOT NULL DEFAULT 'pending',
+  issued_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  paid_at      DATETIME DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_royalties_user (user_id),
+  KEY idx_royalties_status (status),
+  KEY idx_royalties_issued (issued_at),
+  CONSTRAINT fk_royalties_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- SEED DATA
+-- ============================================================================
+
+-- Demo artist account.
+-- NOTE: password_hash below is a PLACEHOLDER bcrypt hash (cost 10). It will not
+-- match any password. Replace it with a real hash, e.g. in Node:
+--   node -e "console.log(require('bcrypt').hashSync('demo12345', 10))"
+-- then:
+--   UPDATE users SET password_hash = '<generated hash>' WHERE email = 'demo@claudesounds.dev';
+-- Alternatively just sign up through the app UI at /signup.
+INSERT INTO users (id, email, password_hash, display_name, artist_name, role, created_at) VALUES
+  (1, 'demo@claudesounds.dev', '$2b$10$PLACEHOLDERPLACEHOLDERuXk3Qb1jw0mS1H2xYb0i2Lm7aVQmC7fO', 'Nadia Vance', 'Nadia Vance', 'artist', '2024-01-12 09:30:00'),
+  (2, 'label@claudesounds.dev', '$2b$10$PLACEHOLDERPLACEHOLDERuXk3Qb1jw0mS1H2xYb0i2Lm7aVQmC7fO', 'Northline Records', 'Northline Records', 'label', '2024-02-02 11:05:00');
+
+-- ---------------------------------------------------------------- releases --
+INSERT INTO releases (id, user_id, title, artist_name, release_type, primary_genre, label, upc, release_date, status, artwork_color, created_at, updated_at) VALUES
+  (1, 1, 'Neon Harbour', 'Nadia Vance', 'album', 'Alternative', 'Northline Records', '0885150001234', DATE_SUB(CURDATE(), INTERVAL 120 DAY), 'live', 'violet', DATE_SUB(NOW(), INTERVAL 150 DAY), DATE_SUB(NOW(), INTERVAL 40 DAY)),
+  (2, 1, 'Slow Signal', 'Nadia Vance', 'ep', 'Indie Pop', 'Northline Records', '0885150005678', DATE_SUB(CURDATE(), INTERVAL 45 DAY), 'live', 'amber', DATE_SUB(NOW(), INTERVAL 70 DAY), DATE_SUB(NOW(), INTERVAL 20 DAY)),
+  (3, 1, 'Paper Lanterns', 'Nadia Vance', 'single', 'Folk', NULL, '0885150009012', DATE_SUB(CURDATE(), INTERVAL 7 DAY), 'in_review', 'teal', DATE_SUB(NOW(), INTERVAL 21 DAY), DATE_SUB(NOW(), INTERVAL 5 DAY)),
+  (4, 1, 'Midnight Rewrite', 'Nadia Vance', 'single', 'Electronic', NULL, NULL, DATE_ADD(CURDATE(), INTERVAL 28 DAY), 'draft', 'rose', DATE_SUB(NOW(), INTERVAL 6 DAY), DATE_SUB(NOW(), INTERVAL 1 DAY));
+
+-- ------------------------------------------------------------------ tracks --
+INSERT INTO tracks (id, release_id, track_number, title, isrc, duration_seconds, explicit, songwriters) VALUES
+  (1, 1, 1, 'Harbour Lights',      'USCS11900001', 213, 0, 'Nadia Vance, Theo Brandt'),
+  (2, 1, 2, 'Static Bloom',        'USCS11900002', 247, 0, 'Nadia Vance'),
+  (3, 1, 3, 'Undertow',            'USCS11900003', 198, 1, 'Nadia Vance, Mira Oyelaran'),
+  (4, 1, 4, 'Cassette Summer',     'USCS11900004', 226, 0, 'Nadia Vance, Theo Brandt'),
+  (5, 1, 5, 'Neon Harbour',        'USCS11900005', 302, 0, 'Nadia Vance'),
+  (6, 2, 1, 'Slow Signal',         'USCS12000001', 231, 0, 'Nadia Vance, Theo Brandt'),
+  (7, 2, 2, 'Low Tide Radio',      'USCS12000002', 205, 0, 'Nadia Vance'),
+  (8, 2, 3, 'Held Note',           'USCS12000003', 189, 0, 'Nadia Vance, Mira Oyelaran'),
+  (9, 3, 1, 'Paper Lanterns',      'USCS12100001', 244, 0, 'Nadia Vance'),
+  (10, 4, 1, 'Midnight Rewrite',   NULL,           218, 1, 'Nadia Vance, Kai Sorenson');
+
+-- -------------------------------------------------------- store_deliveries --
+INSERT INTO store_deliveries (release_id, store_name, status, delivered_at) VALUES
+  (1, 'Spotify',       'live',      DATE_SUB(NOW(), INTERVAL 118 DAY)),
+  (1, 'Apple Music',   'live',      DATE_SUB(NOW(), INTERVAL 118 DAY)),
+  (1, 'Amazon Music',  'live',      DATE_SUB(NOW(), INTERVAL 117 DAY)),
+  (1, 'YouTube Music', 'live',      DATE_SUB(NOW(), INTERVAL 117 DAY)),
+  (1, 'Deezer',        'live',      DATE_SUB(NOW(), INTERVAL 116 DAY)),
+  (1, 'Tidal',         'live',      DATE_SUB(NOW(), INTERVAL 116 DAY)),
+  (2, 'Spotify',       'live',      DATE_SUB(NOW(), INTERVAL 43 DAY)),
+  (2, 'Apple Music',   'live',      DATE_SUB(NOW(), INTERVAL 43 DAY)),
+  (2, 'Amazon Music',  'live',      DATE_SUB(NOW(), INTERVAL 42 DAY)),
+  (2, 'YouTube Music', 'delivered', DATE_SUB(NOW(), INTERVAL 42 DAY)),
+  (2, 'Deezer',        'live',      DATE_SUB(NOW(), INTERVAL 41 DAY)),
+  (2, 'Tidal',         'failed',    NULL),
+  (3, 'Spotify',       'delivered', DATE_SUB(NOW(), INTERVAL 5 DAY)),
+  (3, 'Apple Music',   'pending',   NULL),
+  (3, 'Amazon Music',  'pending',   NULL),
+  (3, 'YouTube Music', 'pending',   NULL),
+  (3, 'Deezer',        'pending',   NULL),
+  (3, 'Tidal',         'pending',   NULL);
+
+-- -------------------------------------------------------- publishing_works --
+INSERT INTO publishing_works (id, user_id, track_id, work_title, iswc, society, registration_status, created_at) VALUES
+  (1, 1, 1,  'Harbour Lights',   'T-123456789-1', 'ASCAP', 'registered',   DATE_SUB(NOW(), INTERVAL 140 DAY)),
+  (2, 1, 3,  'Undertow',         'T-123456790-2', 'ASCAP', 'registered',   DATE_SUB(NOW(), INTERVAL 138 DAY)),
+  (3, 1, 6,  'Slow Signal',      'T-123456791-3', 'BMI',   'submitted',    DATE_SUB(NOW(), INTERVAL 60 DAY)),
+  (4, 1, 9,  'Paper Lanterns',   NULL,            'PRS',   'unregistered', DATE_SUB(NOW(), INTERVAL 18 DAY)),
+  (5, 1, 10, 'Midnight Rewrite', NULL,            NULL,    'unregistered', DATE_SUB(NOW(), INTERVAL 4 DAY));
+
+-- ------------------------------------------------------- publishing_splits --
+INSERT INTO publishing_splits (work_id, writer_name, role, share_percent) VALUES
+  (1, 'Nadia Vance',       'composer',  60.00),
+  (1, 'Theo Brandt',       'lyricist',  25.00),
+  (1, 'Northline Publishing', 'publisher', 15.00),
+  (2, 'Nadia Vance',       'composer',  70.00),
+  (2, 'Mira Oyelaran',     'lyricist',  30.00),
+  (3, 'Nadia Vance',       'composer',  50.00),
+  (3, 'Theo Brandt',       'arranger',  30.00),
+  (3, 'Northline Publishing', 'publisher', 20.00),
+  (4, 'Nadia Vance',       'composer', 100.00),
+  (5, 'Nadia Vance',       'composer',  65.00),
+  (5, 'Kai Sorenson',      'composer',  35.00);
+
+-- -------------------------------------------------------------- campaigns --
+INSERT INTO campaigns (user_id, release_id, name, channel, status, budget_cents, spend_cents, start_date, end_date, clicks, impressions) VALUES
+  (1, 2, 'Slow Signal — playlist push',      'playlist_pitch', 'running',   120000,  74500, DATE_SUB(CURDATE(), INTERVAL 20 DAY), DATE_ADD(CURDATE(), INTERVAL 10 DAY),  3120, 184000),
+  (1, 2, 'Slow Signal — social ads',         'social_ads',     'running',   250000, 163200, DATE_SUB(CURDATE(), INTERVAL 18 DAY), DATE_ADD(CURDATE(), INTERVAL 12 DAY),  8940, 512300),
+  (1, 1, 'Neon Harbour anniversary PR',      'pr',             'completed', 180000, 180000, DATE_SUB(CURDATE(), INTERVAL 95 DAY), DATE_SUB(CURDATE(), INTERVAL 65 DAY),  2410, 96500),
+  (1, 3, 'Paper Lanterns pre-save email',    'email',          'scheduled',  40000,      0, DATE_ADD(CURDATE(), INTERVAL 3 DAY),  DATE_ADD(CURDATE(), INTERVAL 24 DAY),     0,      0),
+  (1, 4, 'Midnight Rewrite creator seeding', 'influencer',     'draft',      90000,      0, DATE_ADD(CURDATE(), INTERVAL 21 DAY), DATE_ADD(CURDATE(), INTERVAL 51 DAY),     0,      0);
+
+-- ------------------------------------------------------------ stream_stats --
+-- 60 days of daily per-platform stats for the two live releases, so the
+-- dashboard can compare the last 30 days against the previous 30 days.
+INSERT INTO stream_stats (release_id, stat_date, platform, streams, listeners, revenue_cents)
+WITH RECURSIVE days (n) AS (
+  SELECT 0
+  UNION ALL
+  SELECT n + 1 FROM days WHERE n < 59
+),
+platforms (platform, weight) AS (
+  SELECT 'Spotify', 100 UNION ALL
+  SELECT 'Apple Music', 52 UNION ALL
+  SELECT 'Amazon Music', 28 UNION ALL
+  SELECT 'YouTube Music', 34 UNION ALL
+  SELECT 'Deezer', 14 UNION ALL
+  SELECT 'Tidal', 8
+),
+rel (release_id, base) AS (
+  SELECT 1, 42 UNION ALL
+  SELECT 2, 70
+)
+SELECT
+  rel.release_id,
+  DATE_SUB(CURDATE(), INTERVAL days.n DAY) AS stat_date,
+  platforms.platform,
+  GREATEST(
+    1,
+    FLOOR(
+      rel.base * platforms.weight / 100
+      * (1 + (59 - days.n) * 0.012)
+      * (1 + 0.18 * SIN(days.n / 3.0))
+      + ((days.n * 37 + platforms.weight * 11 + rel.release_id * 7) % 23)
+    )
+  ) AS streams,
+  GREATEST(
+    1,
+    FLOOR(
+      rel.base * platforms.weight / 100
+      * (1 + (59 - days.n) * 0.012)
+      * (1 + 0.18 * SIN(days.n / 3.0))
+      * 0.42
+      + ((days.n * 13 + platforms.weight * 5 + rel.release_id * 3) % 11)
+    )
+  ) AS listeners,
+  GREATEST(
+    1,
+    FLOOR(
+      rel.base * platforms.weight / 100
+      * (1 + (59 - days.n) * 0.012)
+      * 0.38
+    )
+  ) AS revenue_cents
+FROM days
+CROSS JOIN platforms
+CROSS JOIN rel;
+
+-- A short tail of early data for the release that is still in review.
+INSERT INTO stream_stats (release_id, stat_date, platform, streams, listeners, revenue_cents)
+WITH RECURSIVE d (n) AS (
+  SELECT 0 UNION ALL SELECT n + 1 FROM d WHERE n < 4
+)
+SELECT
+  3,
+  DATE_SUB(CURDATE(), INTERVAL d.n DAY),
+  'Spotify',
+  120 + (d.n * 37) % 60,
+  60 + (d.n * 17) % 25,
+  40 + (d.n * 7) % 20
+FROM d;
+
+-- ------------------------------------------------------ royalty_statements --
+INSERT INTO royalty_statements (user_id, period_label, gross_cents, fee_cents, net_cents, status, issued_at) VALUES
+  (1, 'Q1 2025', 486300, 48630, 437670, 'paid',    DATE_SUB(NOW(), INTERVAL 120 DAY)),
+  (1, 'Q2 2025', 612450, 61245, 551205, 'paid',    DATE_SUB(NOW(), INTERVAL 60 DAY)),
+  (1, 'Q3 2025', 738900, 73890, 665010, 'pending', DATE_SUB(NOW(), INTERVAL 9 DAY));
